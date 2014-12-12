@@ -5,10 +5,12 @@ import io.vertx.core.DeploymentOptions;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.ext.jdbc.JdbcUtils;
 import io.vertx.test.core.VertxTestBase;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.concurrent.CountDownLatch;
@@ -25,6 +27,12 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   private static final String TESTDB_URL = "jdbc:hsqldb:mem:testdb";
   private static final String TESTDB_USER = "sa";
   private static final String TESTDB_PASSWORD = "";
+  
+  // -------------------------------------------------------------------------
+  // Member Variables
+  // -------------------------------------------------------------------------
+
+  private Connection mTestConnection;
 
   // -------------------------------------------------------------------------
   // Overridden VertxTestBase Protocol
@@ -73,8 +81,8 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   // -------------------------------------------------------------------------
 
   protected void setupTestDb() throws SQLException {
-    final Connection connection = DriverManager.getConnection(TESTDB_URL, TESTDB_USER, TESTDB_PASSWORD);
-    final Statement statement = connection.createStatement();
+    mTestConnection = DriverManager.getConnection(TESTDB_URL, TESTDB_USER, TESTDB_PASSWORD);
+    final Statement statement = mTestConnection.createStatement();
     try {
       statement.execute("create table user ( " +
         "id integer generated always as identity(start with 1) primary key, " +
@@ -88,19 +96,17 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       System.out.println("Create & insert complete!");
     } finally {
       statement.close();
-      connection.close();
     }
   }
   
   protected void tearDownTestDb() throws SQLException {
-    final Connection connection = DriverManager.getConnection(TESTDB_URL, TESTDB_USER, TESTDB_PASSWORD);
-    final Statement statement = connection.createStatement();
+    final Statement statement = mTestConnection.createStatement();
     try {
       statement.execute("drop table user");
       System.out.println("Teardown complete!");
     } finally {
       statement.close();
-      connection.close();
+      mTestConnection.close();
     }
   }
 
@@ -130,6 +136,36 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
     final JsonArray jsonArray = assertJsonArray(value);
     assertEquals(size, jsonArray.size());
     return jsonArray;
+  }
+
+  protected void assertResultSetExists(final String querySql) {
+    Statement testStatement = null;
+    ResultSet resultSet = null;
+    try {
+      testStatement = mTestConnection.createStatement();
+      resultSet = testStatement.executeQuery(querySql);
+      assertTrue(resultSet.next());
+    } catch(SQLException e) {
+      fail("Caught SQLException");
+    } finally {
+      JdbcUtils.closeQuietly(resultSet);
+      JdbcUtils.closeQuietly(testStatement);
+    }
+  }
+
+  protected void assertResultSetNotExists(final String querySql) {
+    Statement testStatement = null;
+    ResultSet resultSet = null;
+    try {
+      testStatement = mTestConnection.createStatement();
+      resultSet = testStatement.executeQuery(querySql);
+      assertFalse(resultSet.next());
+    } catch(SQLException e) {
+      fail("Caught SQLException");
+    } finally {
+      JdbcUtils.closeQuietly(resultSet);
+      JdbcUtils.closeQuietly(testStatement);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -267,6 +303,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeUpdate_insert_singleBind() {
+    assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
     vertx.eventBus().send(
       TESTDB_ADDRESS, 
       new JsonObject()
@@ -280,6 +317,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         System.out.println("Insert result: " + response.result().body());
         final JsonObject result = assertJsonObject(response.result().body(), 2);
         assertEquals(1, result.getInteger("rowCount").intValue());
+        assertResultSetExists("select * from user where email = 'mallory@test.com'");
         testComplete();
       }
     );
@@ -291,6 +329,8 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeUpdate_insert_multipleBind() {
+    assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
+    assertResultSetNotExists("select * from user where email = 'chuck@test.com'");
     vertx.eventBus().send(
       TESTDB_ADDRESS, 
       new JsonObject()
@@ -307,6 +347,8 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
           final JsonObject result = assertJsonObject(results.getValue(i), 2);
           assertEquals(1, result.getInteger("rowCount").intValue());
         }
+        assertResultSetExists("select * from user where email = 'mallory@test.com'");
+        assertResultSetExists("select * from user where email = 'chuck@test.com'");
         testComplete();
       }
     );
@@ -328,6 +370,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       (response) -> {
         assertNull(response.result());
         assertNotNull(response.cause());
+        assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
         testComplete();
       }
     );
@@ -343,6 +386,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeUpdate_update_singleBind() {
+    assertResultSetNotExists("select * from user where name = 'Bobby'");
     vertx.eventBus().send(
       TESTDB_ADDRESS, 
       new JsonObject()
@@ -353,6 +397,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
         assertEquals(1, result.getInteger("rowCount").intValue());
+        assertResultSetExists("select * from user where name = 'Bobby'");
         testComplete();
       }
     );
@@ -363,7 +408,31 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    * 
    */
   @Test
+  public void test_executeUpdate_update_singleBind_noMatch() {
+    vertx.eventBus().send(
+      TESTDB_ADDRESS, 
+      new JsonObject()
+        .put("sql", "update user set name = ? where email = ?")
+        .put("bind", new JsonArray().add("Bobby").add("bobaroni@test.com")),
+      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      (response) -> {
+        assertNotNull(response.result());
+        final JsonObject result = assertJsonObject(response.result().body(), 1);
+        assertEquals(0, result.getInteger("rowCount").intValue());
+        assertResultSetNotExists("select * from user where name = 'Bobby'");
+        testComplete();
+      }
+    );
+    await();
+  }
+
+  /**
+   * 
+   */
+  @Test
   public void test_executeUpdate_update_multipleBind() {
+    assertResultSetNotExists("select * from user where name = 'Bobby'");
+    assertResultSetNotExists("select * from user where name = 'Alicia'");
     vertx.eventBus().send(
       TESTDB_ADDRESS, 
       new JsonObject()
@@ -379,12 +448,40 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
           final JsonObject result = assertJsonObject(results.getValue(i), 1);
           assertEquals(1, result.getInteger("rowCount").intValue());
         }
+        assertResultSetExists("select * from user where name = 'Bobby'");
+        assertResultSetExists("select * from user where name = 'Alicia'");
         testComplete();
       }
     );
     await();
   }
   
+  /**
+   * 
+   */
+  @Test
+  public void test_executeUpdate_update_multipleBind_noMatches() {
+    vertx.eventBus().send(
+      TESTDB_ADDRESS, 
+      new JsonObject()
+        .put("sql", "update user set name = ? where email = ?")
+        .put("bind", new JsonArray()
+          .add(new JsonArray().add("Bobby").add("bobaroni@test.com"))
+          .add(new JsonArray().add("Alicia").add("alicia@test.com"))), 
+      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      (response) -> {
+        assertNotNull(response.result());
+        final JsonArray results = assertJsonArray(response.result().body(), 2);
+        for (int i = 0; i < results.size(); i++) {
+          final JsonObject result = assertJsonObject(results.getValue(i), 1);
+          assertEquals(0, result.getInteger("rowCount").intValue());
+        }
+        testComplete();
+      }
+    );
+    await();
+  }
+
   /**
    * 
    */
@@ -399,6 +496,136 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       (response) -> {
         assertNull(response.result());
         assertNotNull(response.cause());
+        testComplete();
+      }
+    );
+    await();
+  }
+
+  // -------------------------------------------------------------------------
+  // Delete Tests
+  // -------------------------------------------------------------------------
+
+  /**
+   * 
+   */
+  @Test
+  public void test_executeUpdate_delete_singleBind() {
+    assertResultSetExists("select * from user where email = 'bob@test.com'");
+    vertx.eventBus().send(
+      TESTDB_ADDRESS, 
+      new JsonObject()
+        .put("sql", "delete from user where email = ?")
+        .put("bind", new JsonArray().add("bob@test.com")),
+      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      (response) -> {
+        assertNotNull(response.result());
+        final JsonObject result = assertJsonObject(response.result().body(), 1);
+        assertEquals(1, result.getInteger("rowCount").intValue());
+        assertResultSetNotExists("select * from user where email = 'bob@test.com'");
+        testComplete();
+      }
+    );
+    await();
+  }
+  
+  /**
+   * 
+   */
+  @Test
+  public void test_executeUpdate_delete_singleBind_noMatch() {
+    assertResultSetExists("select * from user where email = 'bob@test.com'");
+    vertx.eventBus().send(
+      TESTDB_ADDRESS, 
+      new JsonObject()
+        .put("sql", "delete from user where email = ?")
+        .put("bind", new JsonArray().add("bobaroni@test.com")),
+      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      (response) -> {
+        assertNotNull(response.result());
+        final JsonObject result = assertJsonObject(response.result().body(), 1);
+        assertEquals(0, result.getInteger("rowCount").intValue());
+        assertResultSetExists("select * from user where email = 'bob@test.com'");
+        testComplete();
+      }
+    );
+    await();
+  }
+
+  /**
+   * 
+   */
+  @Test
+  public void test_executeUpdate_delete_multipleBind() {
+    assertResultSetExists("select * from user where email = 'bob@test.com'");
+    assertResultSetExists("select * from user where email = 'alice@test.com'");
+    vertx.eventBus().send(
+      TESTDB_ADDRESS, 
+      new JsonObject()
+        .put("sql", "delete from user where email = ?")
+        .put("bind", new JsonArray()
+          .add(new JsonArray().add("bob@test.com"))
+          .add(new JsonArray().add("alice@test.com"))), 
+      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      (response) -> {
+        assertNotNull(response.result());
+        final JsonArray results = assertJsonArray(response.result().body(), 2);
+        for (int i = 0; i < results.size(); i++) {
+          final JsonObject result = assertJsonObject(results.getValue(i), 1);
+          assertEquals(1, result.getInteger("rowCount").intValue());
+        }
+        assertResultSetNotExists("select * from user where email = 'bob@test.com'");
+        assertResultSetNotExists("select * from user where email = 'alice@test.com'");
+        testComplete();
+      }
+    );
+    await();
+  }
+  
+  /**
+   * 
+   */
+  @Test
+  public void test_executeUpdate_delete_multipleBind_noMatches() {
+    assertResultSetExists("select * from user where email = 'bob@test.com'");
+    assertResultSetExists("select * from user where email = 'alice@test.com'");
+    vertx.eventBus().send(
+      TESTDB_ADDRESS, 
+      new JsonObject()
+        .put("sql", "delete from user where email = ?")
+        .put("bind", new JsonArray()
+          .add(new JsonArray().add("bobaroni@test.com"))
+          .add(new JsonArray().add("alicia@test.com"))), 
+      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      (response) -> {
+        assertNotNull(response.result());
+        final JsonArray results = assertJsonArray(response.result().body(), 2);
+        for (int i = 0; i < results.size(); i++) {
+          final JsonObject result = assertJsonObject(results.getValue(i), 1);
+          assertEquals(0, result.getInteger("rowCount").intValue());
+        }
+        assertResultSetExists("select * from user where email = 'bob@test.com'");
+        assertResultSetExists("select * from user where email = 'alice@test.com'");
+        testComplete();
+      }
+    );
+    await();
+  }
+
+  /**
+   * 
+   */
+  @Test
+  public void test_executeUpdate_delete_invalidBind() {
+    assertResultSetExists("select * from user where email = 'bob@test.com'");
+    vertx.eventBus().send(
+      TESTDB_ADDRESS, 
+      new JsonObject().put("sql", "delete from user where email = ?"),
+      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      (response) -> {
+        assertNull(response.result());
+        assertNotNull(response.cause());
+        assertResultSetExists("select * from user where email = 'bob@test.com'");
         testComplete();
       }
     );

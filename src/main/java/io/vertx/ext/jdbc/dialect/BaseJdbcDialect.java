@@ -2,7 +2,7 @@ package io.vertx.ext.jdbc.dialect;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.jdbc.Dialect;
+import io.vertx.ext.jdbc.JdbcDialect;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -16,7 +16,7 @@ import java.util.Date;
  * 
  * @author cstansbury
  */
-public class BaseDialect implements Dialect {
+public class BaseJdbcDialect implements JdbcDialect {
 
   private boolean mSupportsParameterMetaData = true;
   

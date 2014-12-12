@@ -7,7 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-public interface Dialect {
+public interface JdbcDialect {
 
   void applyBindParams(PreparedStatement statement, JsonArray bindParams) throws SQLException;
 

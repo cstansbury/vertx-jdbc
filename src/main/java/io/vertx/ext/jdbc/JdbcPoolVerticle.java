@@ -7,7 +7,7 @@ import io.vertx.core.Handler;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.jdbc.dialect.BaseDialect;
+import io.vertx.ext.jdbc.dialect.BaseJdbcDialect;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -41,7 +41,7 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
 
   private HikariDataSource mDataSource;
   
-  private Dialect mDialect;
+  private JdbcDialect mDialect;
 
   // -------------------------------------------------------------------------
   // Overridden AbstractVerticle Protocol
@@ -50,7 +50,7 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
   @Override
   public void start(final Future<Void> startFuture) throws Exception {
     mDataSource = new HikariDataSource(getPoolConfig());
-    mDialect = new BaseDialect();
+    mDialect = new BaseJdbcDialect();
     vertx.eventBus().consumer(config().getString("address", DEFAULT_ADDRESS), this);
     startFuture.complete();
   }
@@ -118,47 +118,11 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
   }
   
   // -------------------------------------------------------------------------
-  // Cleanup Utilities
-  // -------------------------------------------------------------------------
-
-  protected void closeQuietly(final ResultSet resultSet) {
-    if (resultSet != null) { 
-      try { resultSet.close(); } catch(SQLException ignored) { } 
-    }
-  }
-
-  protected void closeQuietly(final PreparedStatement statement) {
-    if (statement != null) { 
-      try { statement.close(); } catch(SQLException ignored) { } 
-    }
-  }
-
-  protected void closeQuietly(final Connection connection) {
-    if (connection != null) { 
-      try { connection.close(); } catch(SQLException ignored) { } 
-    }
-  }
-
-  // -------------------------------------------------------------------------
   // Inner Handler Classes
   // -------------------------------------------------------------------------
 
   protected class MessageHandler implements Handler<Message<JsonObject>> {
 
-    protected class ReplyHandler implements Handler<AsyncResult<Message<JsonObject>>> {
-      @Override
-      public void handle(AsyncResult<Message<JsonObject>> event) {
-        Message<JsonObject> message = event.result();
-        if (message != null) {
-          MessageHandler.this.handle(message);
-        } else {
-          try { resetAutoCommit(); } catch(final SQLException ignored) { }
-          closeConnection();
-          mInConversation = false;
-        }
-      }
-    }
-    
     private Connection mConnection;
 
     private Boolean mAutoCommit;
@@ -259,7 +223,7 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
             };
             responseRows.add(bindRows);
           } finally {
-            closeQuietly(resultSet);
+            JdbcUtils.closeQuietly(resultSet);
           }
         }
         
@@ -269,7 +233,7 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
           responseBody = responseRows;
         }
       } finally {
-        closeQuietly(statement);
+        JdbcUtils.closeQuietly(statement);
       }
       
       return responseBody;
@@ -299,7 +263,7 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
               updateResult.put("generatedKeys", generatedKeys);
             }
           } finally {
-            closeQuietly(resultSet);
+            JdbcUtils.closeQuietly(resultSet);
           }
           
           responseRows.add(updateResult);
@@ -311,7 +275,7 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
           responseBody = responseRows;
         }
       } finally {
-        closeQuietly(statement);
+        JdbcUtils.closeQuietly(statement);
       }
 
       return responseBody;
@@ -348,7 +312,7 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
     }
 
     protected void closeConnection() {
-      closeQuietly(mConnection);
+      JdbcUtils.closeQuietly(mConnection);
       mConnection = null;
     }
 
@@ -357,6 +321,20 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
         mConnection = mDataSource.getConnection();
       }
       return mConnection;
+    }
+   
+    protected class ReplyHandler implements Handler<AsyncResult<Message<JsonObject>>> {
+      @Override
+      public void handle(AsyncResult<Message<JsonObject>> event) {
+        Message<JsonObject> message = event.result();
+        if (message != null) {
+          MessageHandler.this.handle(message);
+        } else {
+          try { resetAutoCommit(); } catch(final SQLException ignored) { }
+          closeConnection();
+          mInConversation = false;
+        }
+      }
     }
     
   }
