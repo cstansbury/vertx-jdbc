@@ -1,11 +1,10 @@
-package io.vertx.ext.jdbc.integration;
+package cstansbury.vertx.jdbc.integration;
 
 import io.vertx.core.AsyncResult;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.jdbc.JdbcUtils;
 import io.vertx.test.core.VertxTestBase;
 
 import java.sql.Connection;
@@ -17,6 +16,9 @@ import java.util.concurrent.CountDownLatch;
 
 import org.junit.Test;
 
+import cstansbury.vertx.jdbc.JdbcUtils;
+import cstansbury.vertx.jdbc.integration.FutureUtils.EventBusWrapper;
+
 public class JdbcPoolVerticleTest extends VertxTestBase {
   
   // -------------------------------------------------------------------------
@@ -27,7 +29,14 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   private static final String TESTDB_URL = "jdbc:hsqldb:mem:testdb";
   private static final String TESTDB_USER = "sa";
   private static final String TESTDB_PASSWORD = "";
-  
+
+  private static final DeliveryOptions EXECUTE_QUERY = new DeliveryOptions().addHeader("action", "executeQuery");
+  private static final DeliveryOptions EXECUTE_UPDATE = new DeliveryOptions().addHeader("action", "executeUpdate");
+  private static final DeliveryOptions START_TRANSACTION = new DeliveryOptions().addHeader("action", "startTransaction");
+  private static final DeliveryOptions COMMIT_TRANSACTION = new DeliveryOptions().addHeader("action", "commitTransaction");
+  private static final DeliveryOptions ROLLBACK_TRANSACTION = new DeliveryOptions().addHeader("action", "rollbackTransaction");
+  private static final DeliveryOptions END_CONVERSATION = new DeliveryOptions().addHeader("action", "endConversation");
+
   // -------------------------------------------------------------------------
   // Member Variables
   // -------------------------------------------------------------------------
@@ -44,7 +53,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
     super.setUp();
     setupTestDb();
     vertx.deployVerticle(
-      "java:io.vertx.ext.jdbc.JdbcPoolVerticle",
+      "java:cstansbury.vertx.jdbc.JdbcPoolVerticle",
       new DeploymentOptions()
         .setMultiThreaded(true)
         .setWorker(true)
@@ -180,7 +189,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
     vertx.eventBus().send(
       TESTDB_ADDRESS, 
       new JsonObject().put("sql", "select id, email, name, gender from user"), 
-      new DeliveryOptions().addHeader("action", "executeQuery"),
+      EXECUTE_QUERY,
       (response) -> {
         assertNotNull(response.result());
         assertJsonArray(response.result().body(), 3);
@@ -200,7 +209,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "select id, email, name, gender from user where email = ?")
         .put("bind", new JsonArray().add("alice@test.com")), 
-      new DeliveryOptions().addHeader("action", "executeQuery"),
+      EXECUTE_QUERY,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray rows = assertJsonArray(response.result().body(), 1);
@@ -224,7 +233,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "select id, email, name, gender from user where gender = ?")
         .put("bind", new JsonArray().add("F")), 
-      new DeliveryOptions().addHeader("action", "executeQuery"),
+      EXECUTE_QUERY,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray rows = assertJsonArray(response.result().body(), 2);
@@ -250,7 +259,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "select id, email, name, gender from user where name like ? and gender = ?")
         .put("bind", new JsonArray().add("Al%").add("F")), 
-      new DeliveryOptions().addHeader("action", "executeQuery"),
+      EXECUTE_QUERY,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray rows = assertJsonArray(response.result().body(), 1);
@@ -277,7 +286,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         .add(new JsonArray().add("alice@test.com"))
         .add(new JsonArray().add("eve@test.com"))
       ),
-      new DeliveryOptions().addHeader("action", "executeQuery"),
+      EXECUTE_QUERY,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -310,7 +319,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         .put("sql", "insert into user(email, name, gender) values (?, ?, ?)")
         .put("bind", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
         .put("generatedKeys", true), 
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         System.out.println(response.cause());
         assertNotNull(response.result());
@@ -339,7 +348,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
           .add(new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
           .add(new JsonArray().add("chuck@test.com").add("Chuck").add("M")))
         .put("generatedKeys", true), 
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -366,7 +375,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         .put("sql", "insert into user(email, name, gender) values (?, ?, ?, ?)")
         .put("bind", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
         .put("generatedKeys", true), 
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNull(response.result());
         assertNotNull(response.cause());
@@ -392,7 +401,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "update user set name = ? where email = ?")
         .put("bind", new JsonArray().add("Bobby").add("bob@test.com")),
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -414,7 +423,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "update user set name = ? where email = ?")
         .put("bind", new JsonArray().add("Bobby").add("bobaroni@test.com")),
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -440,7 +449,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         .put("bind", new JsonArray()
           .add(new JsonArray().add("Bobby").add("bob@test.com"))
           .add(new JsonArray().add("Alicia").add("alice@test.com"))), 
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -468,7 +477,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         .put("bind", new JsonArray()
           .add(new JsonArray().add("Bobby").add("bobaroni@test.com"))
           .add(new JsonArray().add("Alicia").add("alicia@test.com"))), 
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -492,7 +501,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "update user set name = ? where email = ?")
         .put("bind", new JsonArray().add("Bobby")),
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNull(response.result());
         assertNotNull(response.cause());
@@ -517,7 +526,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "delete from user where email = ?")
         .put("bind", new JsonArray().add("bob@test.com")),
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -540,7 +549,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
       new JsonObject()
         .put("sql", "delete from user where email = ?")
         .put("bind", new JsonArray().add("bobaroni@test.com")),
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -566,7 +575,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         .put("bind", new JsonArray()
           .add(new JsonArray().add("bob@test.com"))
           .add(new JsonArray().add("alice@test.com"))), 
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -596,7 +605,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
         .put("bind", new JsonArray()
           .add(new JsonArray().add("bobaroni@test.com"))
           .add(new JsonArray().add("alicia@test.com"))), 
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -621,7 +630,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
     vertx.eventBus().send(
       TESTDB_ADDRESS, 
       new JsonObject().put("sql", "delete from user where email = ?"),
-      new DeliveryOptions().addHeader("action", "executeUpdate"),
+      EXECUTE_UPDATE,
       (response) -> {
         assertNull(response.result());
         assertNotNull(response.cause());
@@ -631,5 +640,124 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
     );
     await();
   }
+
+  // -------------------------------------------------------------------------
+  // Transaction Tests
+  // -------------------------------------------------------------------------
+
+//  /**
+//   * 
+//   */
+//  @Test
+//  public void test_transaction_insert_commit() {
+//    assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
+//    System.out.println("Starting: " + System.currentTimeMillis());
+//    vertx.eventBus().send(
+//      TESTDB_ADDRESS, 
+//      null,
+//      START_TRANSACTION,
+//      (startResponse) -> {
+//        System.out.println("Finished Start");
+//        assertTrue(startResponse.succeeded());
+//        System.out.println("Inserting");
+//        startResponse.result().reply(new JsonObject()
+//            .put("sql", "insert into user(email, name, gender) values (?, ?, ?)")
+//            .put("bind", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
+//            .put("generatedKeys", true), 
+//          EXECUTE_UPDATE,
+//          (insertResponse) -> {
+//            System.out.println("Finished Insert: " + insertResponse.result().body());
+//            assertNotNull(insertResponse.result());
+//            final JsonObject result = assertJsonObject(insertResponse.result().body(), 2);
+//            assertEquals(1, result.getInteger("rowCount").intValue());
+////            assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
+//            System.out.println("Committing");
+//            insertResponse.result().reply(
+//              null, 
+//              COMMIT_TRANSACTION,
+//              (commitResponse) -> {
+//                System.out.println("Finished Commit");
+//                assertTrue(commitResponse.succeeded());
+//                assertResultSetExists("select * from user where email = 'mallory@test.com'");
+//                System.out.println("Ending");
+//                commitResponse.result().reply(
+//                  null, 
+//                  END_CONVERSATION,
+//                  (endResponse) -> {
+//                    System.out.println("Finished Ending: " + System.currentTimeMillis());
+//                    testComplete();
+//                  }
+//                );
+//              }
+//            );
+//          }
+//        );
+//      }
+//    );
+//    await();
+//  }
+  
+//  /**
+//   * 
+//   */
+//  @Test
+//  public void test_transaction_insert_rollback() {
+//    assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
+//    vertx.eventBus().send(TESTDB_ADDRESS, null, START_TRANSACTION, startResponse -> {
+//        assertTrue(startResponse.succeeded());
+//        startResponse.result().reply(new JsonObject()
+//            .put("sql", "insert into user(email, name, gender) values (?, ?, ?)")
+//            .put("bind", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
+//            .put("generatedKeys", true), 
+//          EXECUTE_UPDATE,
+//          insertResponse -> {
+//            assertNotNull(insertResponse.result());
+//            final JsonObject result = assertJsonObject(insertResponse.result().body(), 2);
+//            assertEquals(1, result.getInteger("rowCount").intValue());
+////            assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
+//            insertResponse.result().reply(null, ROLLBACK_TRANSACTION, commitResponse -> {
+//              assertTrue(commitResponse.succeeded());
+//              assertResultSetNotExists("select * from user where email = 'mallory@test.com'");
+//              commitResponse.result().reply(
+//                null, 
+//                END_CONVERSATION,
+//                (endResponse) -> {
+//                  testComplete();
+//                }
+//              );
+//            });
+//          }
+//        );
+//      }
+//    );
+//    await();
+//  }
+//  
+//  /**
+//   * 
+//   */
+//  @Test
+//  public void test_transaction_insert_commit_future() {
+//    final EventBusWrapper eventBus = FutureUtils.wrap(vertx.eventBus());
+//    
+//    eventBus.send(TESTDB_ADDRESS, START_TRANSACTION, null).thenCompose(message -> {
+//      return message.sendReply(EXECUTE_UPDATE, new JsonObject()
+//        .put("sql", "insert into user(email, name, gender) values (?, ?, ?)")
+//        .put("bind", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
+//        .put("generatedKeys", true)
+//      );
+//    }).thenCompose(message -> {
+//      return message.sendReply(COMMIT_TRANSACTION);
+//    }).thenCompose(message -> {
+//      return message.sendReply(END_CONVERSATION);
+//    }).thenAccept(message -> {
+//      testComplete();
+//    }).exceptionally(exception -> {
+//      fail();
+//      return null;
+//    });
+//    
+//    await();
+//  }
 
 }

@@ -1,4 +1,4 @@
-package io.vertx.ext.jdbc;
+package cstansbury.vertx.jdbc;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -21,6 +21,16 @@ public class JdbcUtils {
 
   public static void closeQuietly(final Connection connection) {
     if (connection != null) { 
+      try { connection.close(); } catch(SQLException ignored) { } 
+    }
+  }
+
+  public static void closeQuietly(final Connection connection, final Boolean autoCommit) {
+    if (connection != null) { 
+      if (autoCommit != null) {
+        try { connection.rollback(); } catch(final SQLException ignored) { }
+        try { connection.setAutoCommit(autoCommit); } catch(final SQLException ignored) { }
+      }
       try { connection.close(); } catch(SQLException ignored) { } 
     }
   }

@@ -1,4 +1,4 @@
-package io.vertx.ext.jdbc;
+package cstansbury.vertx.jdbc;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;

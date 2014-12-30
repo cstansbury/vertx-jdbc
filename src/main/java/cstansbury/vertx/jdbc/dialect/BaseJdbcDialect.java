@@ -1,8 +1,7 @@
-package io.vertx.ext.jdbc.dialect;
+package cstansbury.vertx.jdbc.dialect;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.jdbc.JdbcDialect;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -11,6 +10,8 @@ import java.sql.SQLException;
 import java.sql.Types;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+
+import cstansbury.vertx.jdbc.JdbcDialect;
 
 /**
  * 
