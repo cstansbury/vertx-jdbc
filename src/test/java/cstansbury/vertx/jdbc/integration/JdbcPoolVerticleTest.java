@@ -17,7 +17,6 @@ import java.util.concurrent.CountDownLatch;
 import org.junit.Test;
 
 import cstansbury.vertx.jdbc.JdbcUtils;
-import cstansbury.vertx.jdbc.integration.FutureUtils.EventBusWrapper;
 
 public class JdbcPoolVerticleTest extends VertxTestBase {
   
@@ -30,12 +29,8 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   private static final String TESTDB_USER = "sa";
   private static final String TESTDB_PASSWORD = "";
 
-  private static final DeliveryOptions EXECUTE_QUERY = new DeliveryOptions().addHeader("action", "executeQuery");
-  private static final DeliveryOptions EXECUTE_UPDATE = new DeliveryOptions().addHeader("action", "executeUpdate");
-  private static final DeliveryOptions START_TRANSACTION = new DeliveryOptions().addHeader("action", "startTransaction");
-  private static final DeliveryOptions COMMIT_TRANSACTION = new DeliveryOptions().addHeader("action", "commitTransaction");
-  private static final DeliveryOptions ROLLBACK_TRANSACTION = new DeliveryOptions().addHeader("action", "rollbackTransaction");
-  private static final DeliveryOptions END_CONVERSATION = new DeliveryOptions().addHeader("action", "endConversation");
+  private static final DeliveryOptions EXECUTE_QUERY = new DeliveryOptions().addHeader("action", "query");
+  private static final DeliveryOptions EXECUTE_UPDATE = new DeliveryOptions().addHeader("action", "update");
 
   // -------------------------------------------------------------------------
   // Member Variables
