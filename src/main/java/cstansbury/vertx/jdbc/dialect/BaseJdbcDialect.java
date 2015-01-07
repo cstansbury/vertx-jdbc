@@ -1,8 +1,25 @@
+/*
+ * Copyright 2014 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package cstansbury.vertx.jdbc.dialect;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
+import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -40,19 +57,123 @@ public class BaseJdbcDialect implements JdbcDialect {
   private String mTimestampFormat = "yyyy-MM-dd HH:mm:ss";
   
   // -------------------------------------------------------------------------
-  // JdbcDialect Protocol
+  // Call Protocol
   // -------------------------------------------------------------------------
 
+  /**
+   * 
+   * @param connection
+   * @param requestBody
+   * @return
+   * @throws SQLException
+   */
   @Override
   public Object executeCall(final Connection connection, final JsonObject requestBody) throws SQLException {
-    return null;
+    Object responseBody = null;
+    
+    try (final CallableStatement statement = prepareCallStatement(connection, requestBody)) {
+      final List<JsonArray> allBindParams = getAllBindParams(requestBody, statement);
+      final JsonArray responseRows = new JsonArray();
+      
+      registerOutParameters(statement, allBindParams.get(0));
+      
+      for (final JsonArray bindParams : allBindParams) {
+        final JsonObject responseRow = new JsonObject();
+        boolean hasResults = applyCallBindParams(statement, bindParams).execute();
+        
+        if (!hasResults) {
+          responseRow.put("rowCount", statement.getUpdateCount());
+          hasResults = statement.getMoreResults();
+        }
+        
+        if (hasResults) {
+          final JsonArray results = new JsonArray();
+          
+          while (hasResults) {
+            try (final ResultSet resultSet = statement.getResultSet()) {
+              results.add(parseResultSetArray(resultSet));
+              hasResults = statement.getMoreResults();
+            }
+          }
+          
+          responseRow.put("results", flattenResponseRows(results));
+        }
+        
+        responseRows.add(parseOutParameters(statement, allBindParams.get(0), responseRow));
+      }
+      
+      responseBody = flattenResponseRows(responseRows);
+    }
+    
+    return responseBody;
+  }
+
+  private JsonObject parseOutParameters(final CallableStatement statement, final JsonArray bindParams, final JsonObject responseRow) throws SQLException {
+    for (int i = 0; i < bindParams.size(); i++) {
+      final JsonObject bindParam = bindParams.getJsonObject(i);
+      final String outParamName = bindParam.getString("name");
+      if (outParamName != null) {
+        responseRow.put(outParamName, statement.getObject(i + 1));
+      }
+    }
+    
+    return responseRow;
+  }
+
+  /**
+   * 
+   * @param connection
+   * @param requestBody
+   * @return
+   * @throws SQLException
+   */
+  protected CallableStatement prepareCallStatement(final Connection connection, final JsonObject requestBody) throws SQLException {
+    return connection.prepareCall(requestBody.getString("sql"));
   }
   
+  /**
+   * 
+   * @param statement
+   * @param outParams
+   * @throws SQLException
+   */
+  protected void registerOutParameters(final CallableStatement statement, final JsonArray outParams) throws SQLException {
+    for (int i = 0; i < outParams.size(); i++) {
+      final JsonObject outParam = outParams.getJsonObject(i);
+      final Integer sqlType = outParam.getInteger("out");
+      if (sqlType != null) {
+        statement.registerOutParameter(i + 1, sqlType);
+      }
+    }
+  }
+  
+  /**
+   * 
+   * @param statement
+   * @param bindParams
+   * @return
+   * @throws SQLException 
+   */
+  private PreparedStatement applyCallBindParams(final CallableStatement statement, final JsonArray bindParams) throws SQLException {
+    for (int i = 0; i < bindParams.size(); i++) {
+      final JsonObject bindParam = bindParams.getJsonObject(i);
+      final Object value = bindParam.getValue("in");
+      if (value != null) {
+        applyBindParam(statement, i + 1, value);
+      }
+    }
+    return statement;
+  }
+
+  // -------------------------------------------------------------------------
+  // Query Protocol
+  // -------------------------------------------------------------------------
+
   @Override
   public Object executeQuery(final Connection connection, final JsonObject requestBody) throws SQLException {
     Object responseBody = null;
     
-    try (final PreparedStatement statement = prepareQueryStatement(connection, requestBody)) {
+    try (final PreparedStatement statement = connection.prepareStatement(requestBody.getString("sql"))) {
       final List<JsonArray> allBindParams = getAllBindParams(requestBody, statement);
       final JsonArray responseRows = new JsonArray();
       
@@ -62,15 +183,15 @@ public class BaseJdbcDialect implements JdbcDialect {
         }
       }
       
-      if (responseRows.size() == 1) {
-        responseBody = responseRows.getJsonArray(0);
-      } else {
-        responseBody = responseRows;
-      }
+      responseBody = flattenResponseRows(responseRows);
     }
     
     return responseBody;
   }
+
+  // -------------------------------------------------------------------------
+  // Update Protocol
+  // -------------------------------------------------------------------------
 
   @Override
   public Object executeUpdate(final Connection connection, final JsonObject requestBody) throws SQLException {
@@ -101,11 +222,7 @@ public class BaseJdbcDialect implements JdbcDialect {
         responseRows.add(updateResult);
       }
       
-      if (responseRows.size() == 1) {
-        responseBody = responseRows.getValue(0);
-      } else {
-        responseBody = responseRows;
-      }
+      responseBody = flattenResponseRows(responseRows);
     } finally {
       if (originalAutoCommit != null) {
         try {
@@ -123,24 +240,61 @@ public class BaseJdbcDialect implements JdbcDialect {
     return responseBody;
   }
   
+  protected PreparedStatement prepareUpdateStatement(final Connection connection, final JsonObject requestBody) throws SQLException {
+    final String sql = requestBody.getString("sql");
+    final Boolean generatedKeys = requestBody.getBoolean("generatedKeys");
+    final JsonArray generatedKeyIndices = requestBody.getJsonArray("generatedKeyIndices");
+    PreparedStatement statement = null;
+    
+    // TODO lookup in statement cache?
+
+    if (Boolean.TRUE.equals(generatedKeys)) {
+      statement = connection.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS);
+    } else if (generatedKeyIndices != null) {
+      final int[] columnIndexes = new int[generatedKeyIndices.size()];
+      for (int i = 0; i < columnIndexes.length; i++) {
+        columnIndexes[i] = generatedKeyIndices.getInteger(i);
+      }
+      statement = connection.prepareStatement(sql, columnIndexes);
+    } else {
+      statement = connection.prepareStatement(sql);
+    }
+    
+    return statement;
+  }
+
+  // -------------------------------------------------------------------------
+  // Protected Utilities
+  // -------------------------------------------------------------------------
+
+  /**
+   * Flattens (when possible) the response rows that are 
+   * @param responseRows
+   * @return
+   */
+  protected Object flattenResponseRows(final JsonArray responseRows) {
+    return responseRows.size() == 1 ? responseRows.getValue(0) : responseRows;
+  }
+
   // -------------------------------------------------------------------------
   // Protected Bind Param Protocol
   // -------------------------------------------------------------------------
 
   protected PreparedStatement applyBindParams(final PreparedStatement statement, final JsonArray bindParams) throws SQLException {
     for (int i = 0; i < bindParams.size(); i++) {
-      final Object value = bindParams.getValue(i);
-      final int parameterIndex = i + 1;
-      if (value != null) {
-        statement.setObject(parameterIndex, value);
-      } else if (mSupportsParameterMetaData){
-        statement.setNull(parameterIndex, statement.getParameterMetaData().getParameterType(parameterIndex));
-      } else {
-        statement.setNull(parameterIndex, Types.VARCHAR);
-      }
+      applyBindParam(statement, i + 1, bindParams.getValue(i));
     }
-    
     return statement;
+  }
+
+  protected void applyBindParam(final PreparedStatement statement, final int parameterIndex, final Object value) throws SQLException {
+    if (value != null) {
+      statement.setObject(parameterIndex, value);
+    } else if (mSupportsParameterMetaData){
+      statement.setNull(parameterIndex, statement.getParameterMetaData().getParameterType(parameterIndex));
+    } else {
+      statement.setNull(parameterIndex, Types.VARCHAR);
+    }
   }
   
   protected List<JsonArray> getAllBindParams(final JsonObject requestBody, final PreparedStatement preparedStatement) {
@@ -204,51 +358,6 @@ public class BaseJdbcDialect implements JdbcDialect {
     }
     
     return resultRow;
-  }
-
-  // -------------------------------------------------------------------------
-  // Protected PreparedStatement Protocol
-  // -------------------------------------------------------------------------
-
-  protected PreparedStatement prepareQueryStatement(final Connection connection, final JsonObject requestBody) throws SQLException {
-    final String sql = requestBody.getString("sql");
-    PreparedStatement statement = null;
-    
-    if (sql == null) {
-      // todo throw exception
-    }
-    
-    statement = connection.prepareStatement(sql);
-    
-    return statement;
-  }
-  
-  protected PreparedStatement prepareUpdateStatement(final Connection connection, final JsonObject requestBody) throws SQLException {
-    final String sql = requestBody.getString("sql");
-    PreparedStatement statement = null;
-    
-    if (sql == null) {
-      // todo throw exception
-    }
-    
-    // TODO lookup in statement cache?
-
-    final Boolean generatedKeys = requestBody.getBoolean("generatedKeys");
-    final JsonArray generatedKeyIndices = requestBody.getJsonArray("generatedKeyIndices");
-
-    if (Boolean.TRUE.equals(generatedKeys)) {
-      statement = connection.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS);
-    } else if (generatedKeyIndices != null) {
-      final int[] columnIndexes = new int[generatedKeyIndices.size()];
-      for (int i = 0; i < columnIndexes.length; i++) {
-        columnIndexes[i] = generatedKeyIndices.getInteger(i);
-      }
-      statement = connection.prepareStatement(sql, columnIndexes);
-    } else {
-      statement = connection.prepareStatement(sql);
-    }
-    
-    return statement;
   }
 
   // -------------------------------------------------------------------------
