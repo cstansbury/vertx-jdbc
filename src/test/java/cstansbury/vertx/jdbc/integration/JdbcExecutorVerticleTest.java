@@ -2,7 +2,9 @@ package cstansbury.vertx.jdbc.integration;
 
 import io.vertx.core.AsyncResult;
 import io.vertx.core.DeploymentOptions;
+import io.vertx.core.Handler;
 import io.vertx.core.eventbus.DeliveryOptions;
+import io.vertx.core.eventbus.Message;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.test.core.VertxTestBase;
@@ -19,7 +21,7 @@ import org.junit.Test;
 
 import cstansbury.vertx.jdbc.JdbcUtils;
 
-public class JdbcPoolVerticleTest extends VertxTestBase {
+public class JdbcExecutorVerticleTest extends VertxTestBase {
   
   // -------------------------------------------------------------------------
   // Constants
@@ -50,7 +52,7 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
     super.setUp();
     setupTestDb();
     vertx.deployVerticle(
-      "java:cstansbury.vertx.jdbc.JdbcPoolVerticle",
+      "java:cstansbury.vertx.jdbc.JdbcExecutorVerticle",
       new DeploymentOptions()
         .setMultiThreaded(true)
         .setWorker(true)
@@ -185,15 +187,17 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   // Query Tests
   // -------------------------------------------------------------------------
 
+  protected void executeQuery(JsonObject query, Handler<AsyncResult<Message<Object>>> handler) {
+    vertx.eventBus().send(TESTDB_ADDRESS, query, EXECUTE_QUERY, handler);
+  }
+  
   /**
    * 
    */
   @Test
   public void test_executeQuery_noBind() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeQuery(
       new JsonObject().put("sql", "select id, email, name, gender from test_user"), 
-      EXECUTE_QUERY,
       response -> {
         assertNotNull(response.result());
         assertJsonArray(response.result().body(), 3);
@@ -208,12 +212,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeQuery_singleBind_singleParam() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeQuery(
       new JsonObject()
         .put("sql", "select id, email, name, gender from test_user where email = ?")
-        .put("bind", new JsonArray().add("alice@test.com")), 
-      EXECUTE_QUERY,
+        .put("params", new JsonArray().add("alice@test.com")), 
       response -> {
         assertNotNull(response.result());
         final JsonArray rows = assertJsonArray(response.result().body(), 1);
@@ -232,12 +234,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeQuery_singleBind_singleParam_multiResults() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeQuery(
       new JsonObject()
         .put("sql", "select id, email, name, gender from test_user where gender = ?")
-        .put("bind", new JsonArray().add("F")), 
-      EXECUTE_QUERY,
+        .put("params", new JsonArray().add("F")), 
       response -> {
         assertNotNull(response.result());
         final JsonArray rows = assertJsonArray(response.result().body(), 2);
@@ -258,12 +258,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeQuery_singleBind_multiParam() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeQuery(
       new JsonObject()
         .put("sql", "select id, email, name, gender from test_user where name like ? and gender = ?")
-        .put("bind", new JsonArray().add("Al%").add("F")), 
-      EXECUTE_QUERY,
+        .put("params", new JsonArray().add("Al%").add("F")), 
       response -> {
         assertNotNull(response.result());
         final JsonArray rows = assertJsonArray(response.result().body(), 1);
@@ -282,15 +280,13 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeQuery_multiBind_singleParam() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeQuery(
       new JsonObject()
         .put("sql", "select id, email, name, gender from test_user where email = ?")
-        .put("bind", new JsonArray()
+        .put("params", new JsonArray()
         .add(new JsonArray().add("alice@test.com"))
         .add(new JsonArray().add("eve@test.com"))
       ),
-      EXECUTE_QUERY,
       response -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -311,19 +307,21 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   // Insert Tests
   // -------------------------------------------------------------------------
 
+  protected void executeUpdate(JsonObject update, Handler<AsyncResult<Message<Object>>> handler) {
+    vertx.eventBus().send(TESTDB_ADDRESS, update, EXECUTE_UPDATE, handler);
+  }
+  
   /**
    * 
    */
   @Test
   public void test_executeUpdate_insert_singleBind() {
     assertResultSetNotExists("select * from test_user where email = 'mallory@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "insert into test_user(email, name, gender) values (?, ?, ?)")
-        .put("bind", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
+        .put("params", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
         .put("generatedKeys", true), 
-      EXECUTE_UPDATE,
       response -> {
         System.out.println(response.cause());
         assertNotNull(response.result());
@@ -344,15 +342,13 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   public void test_executeUpdate_insert_multipleBind() {
     assertResultSetNotExists("select * from test_user where email = 'mallory@test.com'");
     assertResultSetNotExists("select * from test_user where email = 'chuck@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "insert into test_user(email, name, gender) values (?, ?, ?)")
-        .put("bind", new JsonArray()
+        .put("params", new JsonArray()
           .add(new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
           .add(new JsonArray().add("chuck@test.com").add("Chuck").add("M")))
         .put("generatedKeys", true), 
-      EXECUTE_UPDATE,
       response -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -373,13 +369,11 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeUpdate_insert_invalidBind() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "insert into test_user(email, name, gender) values (?, ?, ?, ?)")
-        .put("bind", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
+        .put("params", new JsonArray().add("mallory@test.com").add("Mallory").add("F"))
         .put("generatedKeys", true), 
-      EXECUTE_UPDATE,
       response -> {
         assertNull(response.result());
         assertNotNull(response.cause());
@@ -400,12 +394,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   @Test
   public void test_executeUpdate_update_singleBind() {
     assertResultSetNotExists("select * from test_user where name = 'Bobby'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "update test_user set name = ? where email = ?")
-        .put("bind", new JsonArray().add("Bobby").add("bob@test.com")),
-      EXECUTE_UPDATE,
+        .put("params", new JsonArray().add("Bobby").add("bob@test.com")),
       response -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -422,12 +414,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeUpdate_update_singleBind_noMatch() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "update test_user set name = ? where email = ?")
-        .put("bind", new JsonArray().add("Bobby").add("bobaroni@test.com")),
-      EXECUTE_UPDATE,
+        .put("params", new JsonArray().add("Bobby").add("bobaroni@test.com")),
       response -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -446,14 +436,12 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   public void test_executeUpdate_update_multipleBind() {
     assertResultSetNotExists("select * from test_user where name = 'Bobby'");
     assertResultSetNotExists("select * from test_user where name = 'Alicia'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "update test_user set name = ? where email = ?")
-        .put("bind", new JsonArray()
+        .put("params", new JsonArray()
           .add(new JsonArray().add("Bobby").add("bob@test.com"))
           .add(new JsonArray().add("Alicia").add("alice@test.com"))), 
-      EXECUTE_UPDATE,
       response -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -474,14 +462,12 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeUpdate_update_multipleBind_noMatches() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "update test_user set name = ? where email = ?")
-        .put("bind", new JsonArray()
+        .put("params", new JsonArray()
           .add(new JsonArray().add("Bobby").add("bobaroni@test.com"))
           .add(new JsonArray().add("Alicia").add("alicia@test.com"))), 
-      EXECUTE_UPDATE,
       response -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -500,12 +486,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
    */
   @Test
   public void test_executeUpdate_update_invalidBind() {
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "update test_user set name = ? where email = ?")
-        .put("bind", new JsonArray().add("Bobby")),
-      EXECUTE_UPDATE,
+        .put("params", new JsonArray().add("Bobby")),
       response -> {
         assertNull(response.result());
         assertNotNull(response.cause());
@@ -525,12 +509,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   @Test
   public void test_executeUpdate_delete_singleBind() {
     assertResultSetExists("select * from test_user where email = 'bob@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "delete from test_user where email = ?")
-        .put("bind", new JsonArray().add("bob@test.com")),
-      EXECUTE_UPDATE,
+        .put("params", new JsonArray().add("bob@test.com")),
       response -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -548,12 +530,10 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   @Test
   public void test_executeUpdate_delete_singleBind_noMatch() {
     assertResultSetExists("select * from test_user where email = 'bob@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "delete from test_user where email = ?")
-        .put("bind", new JsonArray().add("bobaroni@test.com")),
-      EXECUTE_UPDATE,
+        .put("params", new JsonArray().add("bobaroni@test.com")),
       response -> {
         assertNotNull(response.result());
         final JsonObject result = assertJsonObject(response.result().body(), 1);
@@ -572,14 +552,12 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   public void test_executeUpdate_delete_multipleBind() {
     assertResultSetExists("select * from test_user where email = 'bob@test.com'");
     assertResultSetExists("select * from test_user where email = 'alice@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "delete from test_user where email = ?")
-        .put("bind", new JsonArray()
+        .put("params", new JsonArray()
           .add(new JsonArray().add("bob@test.com"))
           .add(new JsonArray().add("alice@test.com"))), 
-      EXECUTE_UPDATE,
       response -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -602,14 +580,12 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   public void test_executeUpdate_delete_multipleBind_noMatches() {
     assertResultSetExists("select * from test_user where email = 'bob@test.com'");
     assertResultSetExists("select * from test_user where email = 'alice@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject()
         .put("sql", "delete from test_user where email = ?")
-        .put("bind", new JsonArray()
+        .put("params", new JsonArray()
           .add(new JsonArray().add("bobaroni@test.com"))
           .add(new JsonArray().add("alicia@test.com"))), 
-      EXECUTE_UPDATE,
       response -> {
         assertNotNull(response.result());
         final JsonArray results = assertJsonArray(response.result().body(), 2);
@@ -631,10 +607,8 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   @Test
   public void test_executeUpdate_delete_invalidBind() {
     assertResultSetExists("select * from test_user where email = 'bob@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeUpdate( 
       new JsonObject().put("sql", "delete from test_user where email = ?"),
-      EXECUTE_UPDATE,
       response -> {
         assertNull(response.result());
         assertNotNull(response.cause());
@@ -649,28 +623,33 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
   // Call Tests
   // -------------------------------------------------------------------------
 
+  protected static final JsonArray PARAMS_INFO_INSERT_TEST_USER = new JsonArray()
+    .add(new JsonObject().put("mode", "IN"))
+    .add(new JsonObject().put("mode", "IN"))
+    .add(new JsonObject().put("mode", "IN"))
+    .add(new JsonObject().put("mode", "OUT").put("name", "totalUsers").put("type", Types.INTEGER))
+    .add(new JsonObject().put("mode", "INOUT").put("name", "echoToken").put("type", Types.VARCHAR));
+  
+  protected void executeCall(JsonObject call, Handler<AsyncResult<Message<Object>>> handler) {
+    vertx.eventBus().send(TESTDB_ADDRESS, call, EXECUTE_CALL, handler);
+  }
+  
   /**
    * 
    */
   @Test
   public void test_executeCall_singleBind() {
     assertResultSetNotExists("select * from test_user where email = 'mallory@test.com'");
-    vertx.eventBus().send(
-      TESTDB_ADDRESS, 
+    executeCall( 
       new JsonObject()
         .put("sql", "{call insert_test_user(?, ?, ?, ?, ?)}")
-        .put("bind", new JsonArray()
-          .add(new JsonObject().put("in", "mallory@test.com"))
-          .add(new JsonObject().put("in", "Mallory"))
-          .add(new JsonObject().put("in", "F"))
-          .add(new JsonObject().put("out", Types.INTEGER).put("name", "rowCount"))
-          .add(new JsonObject().put("in", "ping").put("out", Types.VARCHAR).put("name", "echoToken"))
-        ),
-      EXECUTE_CALL,
+        .put("params", new JsonArray().add("mallory@test.com").add("Mallory").add("F").add("ping"))
+        .put("paramsInfo", PARAMS_INFO_INSERT_TEST_USER),
       response -> {
         assertNotNull(response.result());
-        final JsonObject result = assertJsonObject(response.result().body(), 3);
-        assertEquals(4, result.getInteger("rowCount").intValue());
+        final JsonObject result = assertJsonObject(response.result().body(), 4);
+        assertEquals(0, result.getInteger("rowCount").intValue());
+        assertEquals(4, result.getInteger("totalUsers").intValue());
         assertEquals("gnip", result.getString("echoToken"));
         assertResultSetExists("select * from test_user where email = 'mallory@test.com'");
         testComplete();
@@ -679,5 +658,32 @@ public class JdbcPoolVerticleTest extends VertxTestBase {
     await();
   }
   
-
+  /**
+   * 
+   */
+  @Test
+  public void test_executeCall_multipleBind() {
+    assertResultSetNotExists("select * from test_user where email = 'mallory@test.com'");
+    executeCall( 
+      new JsonObject()
+        .put("sql", "{call insert_test_user(?, ?, ?, ?, ?)}")
+        .put("params", new JsonArray()
+          .add(new JsonArray().add("mallory@test.com").add("Mallory").add("F").add("ping"))
+          .add(new JsonArray().add("chuck@test.com").add("Chuck").add("M").add("pong"))
+        )
+        .put("paramsInfo", PARAMS_INFO_INSERT_TEST_USER),
+      response -> {
+        assertNotNull(response.result());
+        final JsonArray result = assertJsonArray(response.result().body(), 2);
+//        assertEquals(0, result.getInteger("rowCount").intValue());
+//        assertEquals(4, result.getInteger("totalUsers").intValue());
+//        assertEquals("gnip", result.getString("echoToken"));
+        assertResultSetExists("select * from test_user where email = 'mallory@test.com'");
+        assertResultSetExists("select * from test_user where email = 'chuck@test.com'");
+        testComplete();
+      }
+    );
+    await();
+  }
+  
 }

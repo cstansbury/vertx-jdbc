@@ -20,6 +20,7 @@ import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.eventbus.Message;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
 import java.sql.Connection;
@@ -29,19 +30,20 @@ import java.util.Properties;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+import cstansbury.vertx.jdbc.JdbcRequest.CommitStatus;
 import cstansbury.vertx.jdbc.dialect.BaseJdbcDialect;
 
 /**
  * 
  * @author cstansbury
  */
-public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Message<JsonObject>> {
+public class JdbcExecutorVerticle extends AbstractVerticle implements Handler<Message<JsonObject>> {
 
   // -------------------------------------------------------------------------
   // Constants
   // -------------------------------------------------------------------------
   
-  protected static final String DEFAULT_ADDRESS = "jdbc-pool";
+  protected static final String DEFAULT_ADDRESS = "jdbc-executor";
   
   // -------------------------------------------------------------------------
   // Member Variables
@@ -79,14 +81,14 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
       message.fail(0, "Missing request body SQL");
     } else {
       try (final Connection connection = mDataSource.getConnection()) {
-        if ("query".equals(action)) {
-          responseBody = mDialect.executeQuery(connection, requestBody); 
-        } else if ("update".equals(action)) {
-          responseBody = mDialect.executeUpdate(connection, requestBody);           
-        } else if ("call".equals(action)) {
-          responseBody = mDialect.executeCall(connection, requestBody); 
-        } else {
-          message.fail(0, "Invalid action: " + action);
+        JdbcRequest jdbcRequest = new JdbcRequest(action, requestBody, connection);
+        try {
+          responseBody = handle(message, jdbcRequest);
+        } catch(final Exception e) {
+          if (jdbcRequest.getCommitStatus() == CommitStatus.ON) {
+            connection.rollback();
+          }
+          throw e;
         }
       } catch (final SQLException e) {
         message.fail(e.getErrorCode(), e.getMessage());
@@ -111,4 +113,36 @@ public class JdbcPoolVerticle extends AbstractVerticle implements Handler<Messag
     return new HikariConfig(configProperties);
   }
   
+  protected Object handle(final Message<JsonObject> message, final JdbcRequest request) throws SQLException {
+    final String action = request.getAction();
+    Object responseBody = null;
+    
+    if ("query".equals(action)) {
+      responseBody = mDialect.executeQuery(request); 
+    } else if ("update".equals(action)) {
+      responseBody = mDialect.executeUpdate(request);           
+    } else if ("call".equals(action)) {
+      responseBody = mDialect.executeCall(request);
+    } else if ("batch".equals(action)) {
+      responseBody = handleBatch(message, request);
+    } else {
+      message.fail(0, "Invalid action: " + action);
+    }
+    
+    return responseBody;
+  }
+
+  protected Object handleBatch(final Message<JsonObject> message, final JdbcRequest jdbcRequest) throws SQLException {
+    final JsonArray batchResponse = new JsonArray();
+//    final JsonArray batch = jdbcRequest.getBody().getJsonArray("batch");
+//    
+//    for (int i = 0; i < batch.size(); i++) {
+//      final JsonObject request = batch.getJsonObject(i);
+//      final String action = request.getString("action");
+//      handle(message, new JdbcRequest(action, body, jdbcRequest.getConnection()));
+//    }
+//    
+    return batchResponse;
+  }
+
 }

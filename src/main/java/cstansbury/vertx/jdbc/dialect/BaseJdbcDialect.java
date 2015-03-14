@@ -33,6 +33,7 @@ import java.util.Iterator;
 import java.util.List;
 
 import cstansbury.vertx.jdbc.JdbcDialect;
+import cstansbury.vertx.jdbc.JdbcRequest;
 
 /**
  * 
@@ -68,18 +69,21 @@ public class BaseJdbcDialect implements JdbcDialect {
    * @throws SQLException
    */
   @Override
-  public Object executeCall(final Connection connection, final JsonObject requestBody) throws SQLException {
+  public Object executeCall(final JdbcRequest request) throws SQLException {
+    final Connection connection = request.getConnection();
+    final JsonObject requestBody = request.getBody();
     Object responseBody = null;
     
     try (final CallableStatement statement = prepareCallStatement(connection, requestBody)) {
-      final List<JsonArray> allBindParams = getAllBindParams(requestBody, statement);
+      final JsonArray paramsInfo = requestBody.getJsonArray("paramsInfo", EMPTY_JSON_ARRAY);
+      final List<JsonArray> allParams = getAllBindParams(requestBody, statement);
       final JsonArray responseRows = new JsonArray();
       
-      registerOutParameters(statement, allBindParams.get(0));
+      registerOutParameters(statement, paramsInfo);
       
-      for (final JsonArray bindParams : allBindParams) {
+      for (final JsonArray bindParams : allParams) {
         final JsonObject responseRow = new JsonObject();
-        boolean hasResults = applyCallBindParams(statement, bindParams).execute();
+        boolean hasResults = applyCallBindParams(statement, bindParams, paramsInfo).execute();
         
         if (!hasResults) {
           responseRow.put("rowCount", statement.getUpdateCount());
@@ -99,7 +103,7 @@ public class BaseJdbcDialect implements JdbcDialect {
           responseRow.put("results", flattenResponseRows(results));
         }
         
-        responseRows.add(parseOutParameters(statement, allBindParams.get(0), responseRow));
+        responseRows.add(parseOutParameters(statement, paramsInfo, responseRow));
       }
       
       responseBody = flattenResponseRows(responseRows);
@@ -108,12 +112,11 @@ public class BaseJdbcDialect implements JdbcDialect {
     return responseBody;
   }
 
-  private JsonObject parseOutParameters(final CallableStatement statement, final JsonArray bindParams, final JsonObject responseRow) throws SQLException {
-    for (int i = 0; i < bindParams.size(); i++) {
-      final JsonObject bindParam = bindParams.getJsonObject(i);
-      final String outParamName = bindParam.getString("name");
-      if (outParamName != null) {
-        responseRow.put(outParamName, statement.getObject(i + 1));
+  private JsonObject parseOutParameters(final CallableStatement statement, final JsonArray paramsInfo, final JsonObject responseRow) throws SQLException {
+    for (int i = 0; i < paramsInfo.size(); i++) {
+      final JsonObject paramInfo = paramsInfo.getJsonObject(i);
+      if (!"IN".equals(paramInfo.getString("mode"))) {
+        responseRow.put(paramInfo.getString("name"), statement.getObject(i + 1));
       }
     }
     
@@ -140,7 +143,7 @@ public class BaseJdbcDialect implements JdbcDialect {
   protected void registerOutParameters(final CallableStatement statement, final JsonArray outParams) throws SQLException {
     for (int i = 0; i < outParams.size(); i++) {
       final JsonObject outParam = outParams.getJsonObject(i);
-      final Integer sqlType = outParam.getInteger("out");
+      final Integer sqlType = outParam.getInteger("type");
       if (sqlType != null) {
         statement.registerOutParameter(i + 1, sqlType);
       }
@@ -150,19 +153,31 @@ public class BaseJdbcDialect implements JdbcDialect {
   /**
    * 
    * @param statement
-   * @param bindParams
+   * @param params
    * @return
    * @throws SQLException 
    */
-  private PreparedStatement applyCallBindParams(final CallableStatement statement, final JsonArray bindParams) throws SQLException {
-    for (int i = 0; i < bindParams.size(); i++) {
-      final JsonObject bindParam = bindParams.getJsonObject(i);
-      final Object value = bindParam.getValue("in");
-      if (value != null) {
-        applyBindParam(statement, i + 1, value);
+  private PreparedStatement applyCallBindParams(final CallableStatement statement, final JsonArray params, final JsonArray paramsInfo) throws SQLException {
+    final int paramsCount = Math.max(params.size(), paramsInfo.size());
+    int paramIndex = 0;
+    for (int i = 0; i < paramsCount; i++) {
+      final String paramMode = getParamType(paramsInfo, i, "IN");
+      if (!"OUT".equals(paramMode)) {
+        applyBindParam(statement, i + 1, params.getValue(paramIndex++));
       }
     }
     return statement;
+  }
+
+  /**
+   * 
+   * @param paramsInfo
+   * @param index
+   * @param defaultValue
+   * @return
+   */
+  private String getParamType(final JsonArray paramsInfo, final int index, final String defaultValue) {
+    return index >= paramsInfo.size() ? defaultValue : paramsInfo.getJsonObject(index).getString("mode", defaultValue);
   }
 
   // -------------------------------------------------------------------------
@@ -170,7 +185,9 @@ public class BaseJdbcDialect implements JdbcDialect {
   // -------------------------------------------------------------------------
 
   @Override
-  public Object executeQuery(final Connection connection, final JsonObject requestBody) throws SQLException {
+  public Object executeQuery(final JdbcRequest request) throws SQLException {
+    final Connection connection = request.getConnection();
+    final JsonObject requestBody = request.getBody();
     Object responseBody = null;
     
     try (final PreparedStatement statement = connection.prepareStatement(requestBody.getString("sql"))) {
@@ -194,7 +211,9 @@ public class BaseJdbcDialect implements JdbcDialect {
   // -------------------------------------------------------------------------
 
   @Override
-  public Object executeUpdate(final Connection connection, final JsonObject requestBody) throws SQLException {
+  public Object executeUpdate(final JdbcRequest request) throws SQLException {
+    final Connection connection = request.getConnection();
+    final JsonObject requestBody = request.getBody();
     Boolean originalAutoCommit = null;
     Object responseBody = null;
     
@@ -298,8 +317,8 @@ public class BaseJdbcDialect implements JdbcDialect {
   }
   
   protected List<JsonArray> getAllBindParams(final JsonObject requestBody, final PreparedStatement preparedStatement) {
-    final JsonArray requestParams = requestBody.getJsonArray("bind");
-    final int requestParamsSize = requestParams == null ? 0 : requestParams.size();
+    final JsonArray requestParams = getBindParams(requestBody, preparedStatement);
+    final int requestParamsSize = requestParams.size();
     final List<JsonArray> bindParamsList = new ArrayList<>(Math.max(1, requestParamsSize));
     
     if (requestParamsSize == 0) {
@@ -318,6 +337,34 @@ public class BaseJdbcDialect implements JdbcDialect {
     }
     
     return bindParamsList;
+  }
+
+  protected List<JsonArray> getAllBindParams(final JsonObject requestBody, final PreparedStatement preparedStatement, final JsonObject paramsInfo) {
+    final JsonArray requestParams = getBindParams(requestBody, preparedStatement);
+    final int requestParamsSize = requestParams.size();
+    final List<JsonArray> bindParamsList = new ArrayList<>(Math.max(1, requestParamsSize));
+    
+    if (requestParamsSize == 0) {
+      bindParamsList.add(EMPTY_JSON_ARRAY);
+    } else {
+      final Iterator<Object> iterator = requestParams.iterator();
+      Object value = iterator.next();
+      if (value instanceof JsonArray) {
+        do {
+          bindParamsList.add((JsonArray)value);
+          value = iterator.hasNext() ? iterator.next() : null;
+        } while (value != null);
+      } else {
+        bindParamsList.add(requestParams);
+      }
+    }
+    
+    return bindParamsList;
+  }
+
+  protected JsonArray getBindParams(final JsonObject requestBody, final PreparedStatement preparedStatement) {
+    final JsonArray bindParams = requestBody.getJsonArray("params");
+    return bindParams == null ? EMPTY_JSON_ARRAY : bindParams;
   }
 
   // -------------------------------------------------------------------------
